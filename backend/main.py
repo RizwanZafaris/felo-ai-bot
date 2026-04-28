@@ -30,8 +30,10 @@ logging.basicConfig(level=settings.LOG_LEVEL)
 log = logging.getLogger("felo.coach")
 
 # In-memory session store — short-lived, NEVER persisted.
-_sessions: dict[str, deque] = defaultdict(lambda: deque(maxlen=settings.MAX_SESSION_MESSAGES))
-_session_touched: dict[str, float] = {}
+# Key is (user_id, session_id) so a stolen session_id alone cannot read another
+# user's conversation history.
+_sessions: dict[tuple[str, str], deque] = defaultdict(lambda: deque(maxlen=settings.MAX_SESSION_MESSAGES))
+_session_touched: dict[tuple[str, str], float] = {}
 
 _quota: QuotaStore
 
@@ -84,10 +86,13 @@ async def _haiku_classifier(prompt: str) -> str:
 def _trim_sessions() -> None:
     now = time.time()
     ttl = settings.SESSION_TTL_MINUTES * 60
-    stale = [sid for sid, t in _session_touched.items() if now - t > ttl]
-    for sid in stale:
-        _sessions.pop(sid, None)
-        _session_touched.pop(sid, None)
+    stale = [k for k, t in _session_touched.items() if now - t > ttl]
+    for k in stale:
+        _sessions.pop(k, None)
+        _session_touched.pop(k, None)
+
+
+VALID_PAIRS: set[tuple[str, str]] = {(m["provider"], m["model"]) for m in AVAILABLE_MODELS}
 
 
 async def _resolve_tier(user_id: str) -> Tier:
@@ -127,18 +132,24 @@ async def get_quota(user_id: str):
 
 
 @app.delete("/api/chat/{session_id}")
-async def clear_session(session_id: str):
-    _sessions.pop(session_id, None)
-    _session_touched.pop(session_id, None)
+async def clear_session(session_id: str, user_id: str):
+    """user_id is required as a query param so a leaked session_id alone can't
+    delete another user's history."""
+    key = (user_id, session_id)
+    _sessions.pop(key, None)
+    _session_touched.pop(key, None)
     return {"cleared": True}
+
+
+def _validate_provider_model(provider: str, model: str) -> None:
+    if (provider, model) not in VALID_PAIRS:
+        _err(400, "unknown_provider_model",
+             f"Provider/model pair not supported: {provider}/{model}")
 
 
 @app.post("/api/chat", response_model=CoachResponse)
 async def chat(req: ChatRequest, request: Request):
-    if req.provider not in {p["provider"] for p in AVAILABLE_MODELS}:
-        _err(400, "unknown_provider", f"Unknown provider: {req.provider}")
-    if req.model not in {p["model"] for p in AVAILABLE_MODELS}:
-        _err(400, "unknown_model", f"Unknown model: {req.model}")
+    _validate_provider_model(req.provider, req.model)
 
     _trim_sessions()
     tier = await _resolve_tier(req.user_id)
@@ -148,7 +159,8 @@ async def chat(req: ChatRequest, request: Request):
              quota={"used": qinfo.used, "limit": qinfo.limit, "year_month": qinfo.year_month})
 
     user_ctx = await fetch_user_context(get_engine(), req.user_id)
-    history = list(_sessions[req.session_id])
+    key = (req.user_id, req.session_id)
+    history = list(_sessions[key])
 
     try:
         provider = get_provider(req.provider)
@@ -161,9 +173,9 @@ async def chat(req: ChatRequest, request: Request):
     )
 
     if not output.guardrail_triggered:
-        _sessions[req.session_id].append({"role": "user", "content": req.message})
-        _sessions[req.session_id].append({"role": "assistant", "content": output.answer})
-        _session_touched[req.session_id] = time.time()
+        _sessions[key].append({"role": "user", "content": req.message})
+        _sessions[key].append({"role": "assistant", "content": output.answer})
+        _session_touched[key] = time.time()
         qinfo = await _quota.increment(req.user_id, tier)
 
     log.info(
@@ -183,12 +195,17 @@ async def chat(req: ChatRequest, request: Request):
     )
 
 
+def _sse_escape(text: str) -> str:
+    """Escape newlines so SSE event delimiters aren't broken by data tokens."""
+    return text.replace("\r", "").replace("\n", "\\n")
+
+
 @app.post("/api/chat/stream")
 async def chat_stream(req: ChatRequest):
     """SSE streaming. Pre/post-guardrail still apply: pre runs before any stream
     starts; post runs on the accumulated text after the stream completes."""
-    if req.provider not in {p["provider"] for p in AVAILABLE_MODELS}:
-        _err(400, "unknown_provider", f"Unknown provider: {req.provider}")
+    _validate_provider_model(req.provider, req.model)
+    _trim_sessions()
 
     tier = await _resolve_tier(req.user_id)
     qinfo = await _quota.check(req.user_id, tier)
@@ -196,7 +213,8 @@ async def chat_stream(req: ChatRequest):
         _err(429, "quota_exceeded", "Monthly quota exhausted.")
 
     user_ctx = await fetch_user_context(get_engine(), req.user_id)
-    history = list(_sessions[req.session_id])
+    key = (req.user_id, req.session_id)
+    history = list(_sessions[key])
     provider = get_provider(req.provider)
 
     async def _event_stream():
@@ -205,7 +223,7 @@ async def chat_stream(req: ChatRequest):
 
         pre = await pre_guardrail(req.message, _haiku_classifier)
         if pre.triggered:
-            yield f"event: refusal\ndata: {pre.refusal_text}\n\n"
+            yield f"event: refusal\ndata: {_sse_escape(pre.refusal_text or '')}\n\n"
             yield "event: done\ndata: {}\n\n"
             return
 
@@ -217,19 +235,19 @@ async def chat_stream(req: ChatRequest):
             stream_gen = await provider.complete(messages, system, req.model, stream=True)
             async for token in stream_gen:
                 accumulated += token
-                yield f"data: {token}\n\n"
+                yield f"data: {_sse_escape(token)}\n\n"
         except Exception as e:
             log.warning("stream failed: %s", e)
-            yield f"event: error\ndata: stream failed\n\n"
+            yield "event: error\ndata: stream failed\n\n"
             return
 
         post = post_guardrail(accumulated, user_ctx)
         if post.triggered:
-            yield f"event: guardrail\ndata: {SAFE_FALLBACK}\n\n"
+            yield f"event: guardrail\ndata: {_sse_escape(SAFE_FALLBACK)}\n\n"
         else:
-            _sessions[req.session_id].append({"role": "user", "content": req.message})
-            _sessions[req.session_id].append({"role": "assistant", "content": accumulated})
-            _session_touched[req.session_id] = time.time()
+            _sessions[key].append({"role": "user", "content": req.message})
+            _sessions[key].append({"role": "assistant", "content": accumulated})
+            _session_touched[key] = time.time()
             await _quota.increment(req.user_id, tier)
 
         yield "event: done\ndata: {}\n\n"

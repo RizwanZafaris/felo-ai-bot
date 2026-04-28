@@ -31,6 +31,27 @@ def test_post_allows_grounded():
     assert not r.triggered
 
 
+def test_post_allows_comma_format():
+    r = post_guardrail("Your monthly spend is PKR 60,000.", _ctx())
+    assert not r.triggered
+
+
+def test_post_allows_decimal_within_tolerance():
+    r = post_guardrail("Your monthly spend is PKR 60000.50.", _ctx())
+    assert not r.triggered
+
+
+def test_post_ignores_low_value_numbers():
+    # phone numbers, years, percentages shouldn't trigger
+    r = post_guardrail("Plan for 2025 looks good.", _ctx())
+    assert not r.triggered
+
+
+def test_post_catches_unrelated_pkr_value():
+    r = post_guardrail("Set aside PKR 999999 monthly.", _ctx())
+    assert r.triggered
+
+
 @pytest.mark.asyncio
 async def test_pre_pattern_injection():
     async def cls(_): return "ALLOW"

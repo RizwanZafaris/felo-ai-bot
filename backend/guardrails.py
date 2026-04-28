@@ -70,29 +70,40 @@ async def pre_guardrail(message: str, classifier) -> GuardrailResult:
     return GuardrailResult(False)
 
 
-def _extract_numbers(text: str) -> set[str]:
-    found: set[str] = set()
+def _normalize(num_str: str) -> Optional[int]:
+    """Normalize a captured number string to an int (PKR rounded down).
+    Returns None if the value is below the meaningful threshold."""
+    try:
+        v = int(float(num_str.replace(",", "")))
+    except (ValueError, TypeError):
+        return None
+    return v if v >= 100 else None
+
+
+def _extract_numbers(text: str) -> set[int]:
+    found: set[int] = set()
     for m in PKR_PATTERN.finditer(text):
-        num = (m.group(1) or m.group(2) or "").replace(",", "")
-        if num:
-            found.add(num)
+        raw = (m.group(1) or m.group(2) or "")
+        v = _normalize(raw)
+        if v is not None:
+            found.add(v)
     return found
 
 
-def _context_numbers(ctx: UserContext) -> set[str]:
-    nums = {
-        str(int(ctx.monthly_income_pkr)),
-        str(int(ctx.monthly_spend_pkr)),
-        str(int(ctx.savings_pkr)),
+def _context_numbers(ctx: UserContext) -> set[int]:
+    nums: set[int] = {
+        int(ctx.monthly_income_pkr),
+        int(ctx.monthly_spend_pkr),
+        int(ctx.savings_pkr),
     }
     for t in ctx.transactions:
-        nums.add(str(int(t.amount_pkr)))
+        nums.add(int(t.amount_pkr))
     for g in ctx.goals:
-        nums.add(str(int(g.target_pkr)))
-        nums.add(str(int(g.current_pkr)))
+        nums.add(int(g.target_pkr))
+        nums.add(int(g.current_pkr))
     for b in ctx.bills:
-        nums.add(str(int(b.amount_pkr)))
-    return nums
+        nums.add(int(b.amount_pkr))
+    return {n for n in nums if n >= 100}
 
 
 def post_guardrail(answer: str, ctx: UserContext) -> GuardrailResult:
@@ -109,7 +120,8 @@ def post_guardrail(answer: str, ctx: UserContext) -> GuardrailResult:
 
     answer_nums = _extract_numbers(answer)
     allowed = _context_numbers(ctx)
-    fabricated = {n for n in answer_nums if n not in allowed and int(float(n)) >= 100}
+    # Allow ±1 PKR tolerance (rounding from decimal values like 120000.50)
+    fabricated = {n for n in answer_nums if not any(abs(n - a) <= 1 for a in allowed)}
     if fabricated:
         return GuardrailResult(True, RefusalCategory.UNGROUNDED_NUMBER)
 

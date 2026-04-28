@@ -95,7 +95,7 @@ $("input").addEventListener("keydown", (e) => {
   if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }
 });
 $("clear").addEventListener("click", async () => {
-  await fetch(`${API}/api/chat/${sessionId}`, { method: "DELETE" });
+  await fetch(`${API}/api/chat/${sessionId}?user_id=${encodeURIComponent(userId)}`, { method: "DELETE" });
   $("messages").innerHTML = "";
 });
 

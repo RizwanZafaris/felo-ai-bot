@@ -43,7 +43,7 @@ export default function SettingsScreen({ userId, provider, setProvider, model, s
 
       <Pressable
         style={styles.button}
-        onPress={async () => { if (sessionId) await clearSession(sessionId); await resetSession(); }}
+        onPress={async () => { if (sessionId) await clearSession(sessionId, userId); await resetSession(); }}
       >
         <Text style={{ color: "#fff" }}>Clear conversation</Text>
       </Pressable>

@@ -36,6 +36,6 @@ export async function getModels() {
   return r.json();
 }
 
-export async function clearSession(sessionId: string) {
-  await fetch(`${API}/api/chat/${sessionId}`, { method: "DELETE" });
+export async function clearSession(sessionId: string, userId: string) {
+  await fetch(`${API}/api/chat/${sessionId}?user_id=${encodeURIComponent(userId)}`, { method: "DELETE" });
 }
