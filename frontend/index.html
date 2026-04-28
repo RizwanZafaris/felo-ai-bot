@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>FELO Coach</title>
+<link rel="stylesheet" href="style.css" />
+<script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+</head>
+<body>
+<div class="app">
+  <header>
+    <h1>FELO Coach</h1>
+    <div class="row">
+      <select id="provider"></select>
+      <select id="model"></select>
+      <button id="clear">Clear</button>
+    </div>
+    <div class="quota">
+      <div class="bar"><div id="quotaFill"></div></div>
+      <span id="quotaText">— / — calls</span>
+    </div>
+  </header>
+  <main id="messages"></main>
+  <footer>
+    <textarea id="input" rows="2" placeholder="Ask about your spending, savings, or goals…"></textarea>
+    <button id="send">Send</button>
+  </footer>
+</div>
+<script src="app.js"></script>
+</body>
+</html>

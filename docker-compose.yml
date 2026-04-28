@@ -1,0 +1,27 @@
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: felo_coach
+      POSTGRES_USER: felo
+      POSTGRES_PASSWORD: felo
+    ports: ["5432:5432"]
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./db/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+
+  redis:
+    image: redis:7-alpine
+    ports: ["6379:6379"]
+
+  backend:
+    build: ./backend
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://felo:felo@postgres/felo_coach
+      REDIS_URL: redis://redis:6379
+    ports: ["8000:8000"]
+    depends_on: [postgres, redis]
+
+volumes:
+  pgdata:
