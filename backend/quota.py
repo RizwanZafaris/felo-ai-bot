@@ -26,11 +26,19 @@ class QuotaStore(ABC):
 
 
 class MemoryQuotaStore(QuotaStore):
+    """In-process quota counter. Evicts entries from prior months on access so
+    the store doesn't grow unbounded in long-running dev/test processes."""
     def __init__(self) -> None:
         self._store: dict[tuple[str, str], int] = {}
 
+    def _evict_old(self, current_ym: str) -> None:
+        stale = [k for k in self._store if k[1] != current_ym]
+        for k in stale:
+            self._store.pop(k, None)
+
     async def check(self, user_id: str, tier: Tier) -> QuotaInfo:
         ym = _ym()
+        self._evict_old(ym)
         used = self._store.get((user_id, ym), 0)
         limit = TIER_LIMITS[tier]
         return QuotaInfo(
@@ -40,6 +48,7 @@ class MemoryQuotaStore(QuotaStore):
 
     async def increment(self, user_id: str, tier: Tier) -> QuotaInfo:
         ym = _ym()
+        self._evict_old(ym)
         self._store[(user_id, ym)] = self._store.get((user_id, ym), 0) + 1
         return await self.check(user_id, tier)
 

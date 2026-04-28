@@ -1,7 +1,7 @@
 from datetime import datetime
 from enum import Enum
 from typing import Optional
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 class Tier(str, Enum):
@@ -74,12 +74,23 @@ class Source(BaseModel):
     value: str
 
 
+_ID_PATTERN = r"^[A-Za-z0-9_\-]{1,128}$"
+
+
 class ChatRequest(BaseModel):
     message: str = Field(..., min_length=1, max_length=2000)
-    session_id: str
-    user_id: str
+    session_id: str = Field(..., pattern=_ID_PATTERN)
+    user_id: str = Field(..., pattern=_ID_PATTERN)
     model: str = "claude-sonnet-4-6"
     provider: str = "anthropic"
+
+    @field_validator("message")
+    @classmethod
+    def _strip_message(cls, v: str) -> str:
+        v = v.strip()
+        if not v:
+            raise ValueError("message must not be empty or whitespace-only")
+        return v
 
 
 class CoachResponse(BaseModel):

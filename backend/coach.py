@@ -19,6 +19,9 @@ from retrieval import compress_context, context_sources
 
 log = logging.getLogger(__name__)
 
+# Cap history sent to LLM (defence-in-depth; main.py also bounds via deque maxlen).
+MAX_HISTORY = 20
+
 
 @dataclass
 class CoachOutput:
@@ -53,7 +56,7 @@ async def run_coach(
     ctx_str = compress_context(user_ctx)
     system = f"{COACH_SYSTEM_PROMPT_V1}\n\nUSER_CONTEXT:\n{ctx_str}"
 
-    messages = [*history, {"role": "user", "content": message}]
+    messages = [*history[-MAX_HISTORY:], {"role": "user", "content": message}]
     result: CompletionResult = await provider.complete(messages, system, model, stream=False)
 
     post = post_guardrail(result.text, user_ctx)

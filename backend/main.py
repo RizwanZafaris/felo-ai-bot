@@ -5,7 +5,7 @@ from collections import defaultdict, deque
 from contextlib import asynccontextmanager
 from typing import Optional
 
-from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from slowapi import Limiter
@@ -52,6 +52,21 @@ limiter = Limiter(key_func=get_remote_address, default_limits=["10/minute"])
 app = FastAPI(title="FELO Coach", version="1.0.0", lifespan=lifespan)
 app.state.limiter = limiter
 app.add_middleware(SlowAPIMiddleware)
+
+
+@app.middleware("http")
+async def _strip_server_header(request, call_next):
+    """Strip the `Server: uvicorn` header to avoid leaking the server stack."""
+    response = await call_next(request)
+    if "server" in response.headers:
+        del response.headers["server"]
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Referrer-Policy"] = "no-referrer"
+    return response
+
+
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:3000", "http://localhost:8081"],
@@ -148,7 +163,7 @@ def _validate_provider_model(provider: str, model: str) -> None:
 
 
 @app.post("/api/chat", response_model=CoachResponse)
-async def chat(req: ChatRequest, request: Request):
+async def chat(req: ChatRequest):
     _validate_provider_model(req.provider, req.model)
 
     _trim_sessions()
